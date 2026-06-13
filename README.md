@@ -35,6 +35,69 @@
 - [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
 - [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
 
+---
+
+## 本 Fork 状态 / Local Fork Status
+
+本 fork 在上游 TradingAgents 基础上增加了 **A 股深度支持** 和 **产业链分析注入**，用于个人多市场持仓的周度投研。
+
+### ✅ 已实现 (vs 上游 TradingAgents)
+
+| 功能 | 说明 | 文件 |
+|------|------|------|
+| **A 股新闻** | 东方财富个股新闻 + 宏观政策新闻，via akshare。品质过滤：广告识别 → 低质剔除 → 标题查重 → 来源权威度评分，公告/研报/财报自动标 📌 置顶 | `dataflows/cn_news.py` |
+| **A 股社交媒体情绪** | 东方财富股吧 + 雪球 + 同花顺 + 定量情绪指标（参与意愿/关注指数/综合评分/机构参与度），via akshare | `dataflows/cn_social.py` |
+| **A 股基本面数据** | akshare 提供 80+ 财务指标（PE/PB/ROE/利润率/增速/负债率/现金流）。yfinance → akshare 自动 fallback | `dataflows/cn_fundamentals.py` |
+| **中国宏观查询** | 10 条全球新闻查询中含 5 条中国特化（央行/CSI300/产业政策/中美贸易/亚洲供应链） | `default_config.py` |
+| **双时间维度评级** | PM 输出短线（1-3月，技术/情绪驱动）和长线（6-18月，基本面/产业驱动）独立评级，允许分歧 | `schemas.py`, `portfolio_manager.py` |
+| **产业链卡点注入** | 从持仓 README 提取预计算的产业链/稀缺层分析，注入 Bull/Bear 研究员 prompt，锚定真实价值链位置 | `agent_utils.py`, `bull/bear_researcher.py` |
+| **前瞻性行业趋势** | Bull/Bear prompt 指令主动识别新兴行业趋势（AI/机器人/电动化/自动化）并与公司能力匹配 | `bull/bear_researcher.py` |
+| **新闻品质过滤** | 垃圾广告过滤 → 低质内容剔除 → 标题查重（token 重叠 + SequenceMatcher）→ 品质评分排序 | `dataflows/cn_news.py` |
+| **并行多标的分析** | ThreadPoolExecutor 并行分析（默认 3 并发），每 worker 独立 TradingAgentsGraph 实例，线程安全日志 | `weekly_analysis.py` |
+| **Token 成本追踪** | LangChain callback 自动记录每次 LLM 调用的 token 消耗和费用，输出按模型汇总的成本报告 | `utils/token_tracker.py` |
+
+### ⚠️ 部分具备
+
+| 能力 | 现状 | 可增强 |
+|------|------|--------|
+| 标的身份解析 | yfinance 获取公司名/行业，防 LLM 幻觉 | A 股用 akshare 补充 |
+| 复盘反思 | MemoryLog 记录历史决策 + 5 日收益回溯 | 反思不反馈到下一次分析 |
+| 情绪信号 | 股吧/雪球/定量指标 | 缺少情绪-价格背离检测 |
+| 供应商链条 | serenity-skill 预计算产业链分析 | 不能自动发现同层替代标的 |
+
+### ❌ 尚未实现
+
+| 功能 | 说明 | 对标参考 |
+|------|------|---------|
+| **主动选股 / 机会发现** | 系统只分析已有持仓，不主动发现新标的 | 3S-Trader 6 维评分选股、国金 CoT 投票 |
+| **跨标的横向比较** | 同行业多标的分开分析，无相对优劣排序 | AlphaAgents 多 Agent 排序共识 |
+| **历史学习反馈** | 复盘结果不反馈到下一次分析的 prompt | 国金证券"逻辑动量"滚动回测 |
+| **模拟交易 / 回测** | 无可视化虚拟盘 | TradingAgents-CN 内置虚拟交易环境 |
+| **Web UI** | 纯 CLI | TradingAgents-CN FastAPI + Vue 3 |
+| **报告导出 (Word/PDF)** | 仅 Markdown | TradingAgents-CN 多格式导出 |
+| **Tushare / BaoStock 数据源** | 仅 yfinance + akshare | TradingAgents-CN 三源 fallback |
+| **风险矩阵（跨标的）** | 单标的逐一风控，无组合层面分析 | — |
+| **实时价格预警** | 无推送通知 | — |
+
+### 运行方式
+
+```powershell
+# 周度全量分析（默认 3 并发）
+.venv/Scripts/python weekly_analysis.py
+
+# 自定义并发
+$env:WEEKLY_MAX_WORKERS = "5"
+.venv/Scripts/python weekly_analysis.py
+
+# 单标的分析
+.venv/Scripts/python run_analysis.py
+```
+
+**模型**: deepseek-v4-pro (分析师/研究员), deepseek-v4-flash (Judge/PM)
+**数据**: .env 中设置 `TRADINGAGENTS_CN_SOCIAL_SOURCES=eastmoney_guba,eastmoney_sentiment`
+
+---
+
 <div align="center">
 <a href="https://www.star-history.com/#TauricResearch/TradingAgents&Date">
  <picture>

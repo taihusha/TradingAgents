@@ -7,6 +7,8 @@
 
 v2: 并行分析模式 — 多个标的同时分析，大幅缩短总耗时。
     通过 MAX_WORKERS 控制并发数（默认 3）。
+v3: Token 成本追踪 — 每次 LLM 调用自动记录 token 消耗，分析结束后
+    输出按模型汇总的费用报告。
 """
 import sys
 import os
@@ -112,11 +114,19 @@ def _infer_ticker(folder_name: str) -> str | None:
     return KNOWN.get(folder_name)
 
 
-def analyze_single(folder_name: str, ticker: str, analysis_date: str, worker_id: int) -> dict:
+def analyze_single(
+    folder_name: str,
+    ticker: str,
+    analysis_date: str,
+    worker_id: int,
+    token_tracker=None,  # Optional[TokenTracker] — shared across workers
+) -> dict:
     """Run full TradingAgents analysis for one stock (thread-safe worker).
 
     Each worker creates its own TradingAgentsGraph instance to avoid
-    shared-state contention. Returns the final state dict, or raises.
+    shared-state contention. When *token_tracker* is provided, it is
+    passed as a LangChain callback so per-call token usage is captured.
+    Returns the final state dict, or raises.
     """
     # Import inside the worker so each thread gets fresh module state
     from tradingagents.graph.trading_graph import TradingAgentsGraph
@@ -138,7 +148,8 @@ def analyze_single(folder_name: str, ticker: str, analysis_date: str, worker_id:
     log(f"  [W{worker_id}][{ticker}] Starting analysis...")
     t0 = time.perf_counter()
 
-    ta = TradingAgentsGraph(debug=False, config=config)
+    callbacks = [token_tracker] if token_tracker is not None else []
+    ta = TradingAgentsGraph(debug=False, config=config, callbacks=callbacks)
     final_state, decision = ta.propagate(ticker, analysis_date, supply_chain_context=supply_chain_ctx)
 
     elapsed = time.perf_counter() - t0
@@ -148,7 +159,8 @@ def analyze_single(folder_name: str, ticker: str, analysis_date: str, worker_id:
     elif isinstance(decision, str):
         rating = decision[:80]
 
-    log(f"  [W{worker_id}][{ticker}] Done in {elapsed:.0f}s: {rating}")
+    cost_line = token_tracker.one_line() if token_tracker else ""
+    log(f"  [W{worker_id}][{ticker}] Done in {elapsed:.0f}s: {rating} | {cost_line}")
 
     return final_state
 
@@ -229,7 +241,10 @@ def save_report(folder_name: str, analysis_date: str, report: str):
 
 
 def main():
+    from tradingagents.utils.token_tracker import TokenTracker
+
     analysis_date = date.today().strftime("%Y-%m-%d")
+    tracker = TokenTracker()
 
     log("=" * 60)
     log(f"Weekly Analysis — {analysis_date}")
@@ -256,7 +271,9 @@ def main():
         futures = {}
         for i, (folder_name, ticker, _) in enumerate(holdings):
             worker_id = (i % MAX_WORKERS) + 1
-            future = executor.submit(analyze_single, folder_name, ticker, analysis_date, worker_id)
+            future = executor.submit(
+                analyze_single, folder_name, ticker, analysis_date, worker_id, tracker
+            )
             futures[future] = (folder_name, ticker)
 
         # Process results as they complete
@@ -291,6 +308,9 @@ def main():
             log(f"  ❌ {name}: {err}")
     log(f"Avg per stock: {elapsed/total:.0f}s (parallel with {MAX_WORKERS} workers)")
     log("=" * 60)
+
+    # 4. Token cost summary
+    log("\n" + tracker.summary())
 
 
 if __name__ == "__main__":
