@@ -18,6 +18,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_CN_SOCIAL_SOURCES":    "cn_social_sources",
 }
 
 
@@ -29,6 +30,8 @@ def _coerce(value: str, reference):
         return int(value)
     if isinstance(reference, float):
         return float(value)
+    if isinstance(reference, list):
+        return [item.strip() for item in value.split(",") if item.strip()]
     return value
 
 
@@ -90,12 +93,25 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Search queries used by get_global_news for macro headlines. Extend or
     # replace to broaden geographic / sector coverage.
     "global_news_queries": [
+        # Western / global macro
         "Federal Reserve interest rates inflation",
         "S&P 500 earnings GDP economic outlook",
         "geopolitical risk trade war sanctions",
         "ECB Bank of England BOJ central bank policy",
         "oil commodities supply chain energy",
+        # China / Asia macro — relevant for A-share and global exposure
+        "PBOC People Bank of China LPR monetary policy stimulus",
+        "China CSI 300 A-share market outlook sector rotation",
+        "China industrial policy semiconductor EV renewable energy subsidy",
+        "US China trade tariffs chip export controls sanctions",
+        "Asia supply chain manufacturing PMI factory output",
     ],
+    # Chinese social media sentiment sources (opt-in, empty = disabled).
+    # Supported values: "eastmoney_guba", "xueqiu", "10jqka".
+    # These sources are only queried for tickers that look Chinese
+    # (numeric tickers with .SZ or .SS suffix). Non-CN tickers skip them
+    # automatically. Example: ["eastmoney_guba", "xueqiu"]
+    "cn_social_sources": [],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {

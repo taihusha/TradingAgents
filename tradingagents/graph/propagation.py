@@ -22,6 +22,7 @@ class Propagator:
         asset_type: str = "stock",
         past_context: str = "",
         instrument_context: str = "",
+        supply_chain_context: str = "",
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph.
 
@@ -30,6 +31,12 @@ class Propagator:
         ``TradingAgentsGraph.resolve_instrument_context``). When empty, agents
         fall back to ticker-only context via
         ``get_instrument_context_from_state``.
+
+        ``supply_chain_context`` is optional supply-chain / bottleneck analysis
+        pre-computed by serenity-skill and stored in the holding's README.
+        When present, it is injected into the Bull/Bear researcher prompts so
+        their catalyst/risk analysis is anchored to the real value-chain
+        position rather than generic industry narratives.
         """
         return {
             "messages": [("human", company_name)],
@@ -38,6 +45,7 @@ class Propagator:
             "instrument_context": instrument_context,
             "trade_date": str(trade_date),
             "past_context": past_context,
+            "supply_chain_context": supply_chain_context,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

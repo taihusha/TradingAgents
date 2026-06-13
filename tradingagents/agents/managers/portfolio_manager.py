@@ -52,6 +52,22 @@ def create_portfolio_manager(llm):
 - **Underweight**: Reduce exposure, take partial profits
 - **Sell**: Exit position or avoid entry
 
+**Dual-Horizon Analysis (IMPORTANT)**:
+You MUST produce TWO distinct ratings because short-term trading and long-term investing often diverge:
+
+1. **Short-term (1–3 months)** — Tactical / swing-trading view. Base this PRIMARILY on:
+   - Technical analysis (price action, volume, moving averages, momentum indicators)
+   - Near-term sentiment (retail positioning, social media, fund flows)
+   - Imminent catalysts (earnings reports, product launches, policy events within 3 months)
+
+2. **Long-term (6–18 months)** — Strategic / buy-and-hold view. Base this PRIMARILY on:
+   - Fundamentals (revenue growth trajectory, margin trends, cash flow quality, ROIC)
+   - Industry trends (technology adoption curves, regulatory direction, supply-chain evolution)
+   - Competitive moat and structural growth catalysts
+   - Forward-looking sector themes (AI, robotics, electrification, automation, etc.)
+
+The two ratings CAN and SHOULD diverge when the evidence points in different directions across time horizons. A stock with broken technicals but a strong robot-reducer thesis should be Underweight short-term AND Overweight long-term. That contradiction is information — do not suppress it.
+
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**

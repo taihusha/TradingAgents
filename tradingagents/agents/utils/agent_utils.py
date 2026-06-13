@@ -30,6 +30,58 @@ from tradingagents.agents.utils.market_data_validation_tools import (
 logger = logging.getLogger(__name__)
 
 
+def load_supply_chain_context(holdings_dir: str, folder_name: str) -> str:
+    """Load pre-computed supply-chain / bottleneck analysis from a holding's README.
+
+    Searches for sections headed ``Serenity 产业链分析``, ``产业链分析``,
+    ``供应链全景``, or ``供应链分析`` and returns their content. The output
+    is intended for injection into Bull/Bear researcher prompts so their
+    catalyst/risk arguments are anchored to the real value-chain position.
+
+    Args:
+        holdings_dir: Path to the holdings root directory (e.g. ``03 持仓研究``).
+        folder_name: The stock's folder name under that directory.
+
+    Returns:
+        The extracted section text, or an empty string if no section is found.
+    """
+    import re
+    from pathlib import Path
+
+    readme = Path(holdings_dir) / folder_name / "README.md"
+    if not readme.exists():
+        return ""
+
+    try:
+        content = readme.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+    # Find the supply-chain analysis section.
+    # Match headers like: ## Serenity 产业链分析, ## 产业链分析,
+    # ### 供应链全景, ## 供应链分析, etc.
+    patterns = [
+        r"##\s+Serenity\s+产业链分析\s*\n(.*?)(?=\n##\s|\Z)",
+        r"##\s+产业链分析\s*\n(.*?)(?=\n##\s|\Z)",
+        r"##\s+供应链全景\s*\n(.*?)(?=\n##\s|\Z)",
+        r"##\s+供应链分析\s*\n(.*?)(?=\n##\s|\Z)",
+        r"###\s+Serenity\s+产业链分析\s*\n(.*?)(?=\n(?:##|###)\s|\Z)",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, content, re.DOTALL)
+        if m:
+            section = m.group(1).strip()
+            if len(section) > 100:  # Exclude trivial placeholders
+                return (
+                    f"（以下为预计算的产业链/卡点分析，从 {folder_name}/README.md 提取。"
+                    f"请在辩论中以此为锚点——讨论催化剂时引用真实的稀缺层位置、"
+                    f"客户关系和竞争格局，而非泛泛的行业趋势。）\n\n{section}"
+                )
+
+    return ""
+
+
 def get_language_instruction() -> str:
     """Return a prompt instruction for the configured output language.
 

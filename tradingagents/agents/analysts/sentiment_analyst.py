@@ -5,13 +5,16 @@ the old version had a prompt that demanded social-media analysis but the
 only tool available was Yahoo Finance news — which led LLMs to fabricate
 Reddit/X/StockTwits content under prompt pressure (verified live).
 
-The redesigned agent pre-fetches three complementary data sources before
-the LLM is invoked and injects them into the prompt as structured blocks:
+The redesigned agent pre-fetches up to four complementary data sources
+before the LLM is invoked and injects them into the prompt as structured
+blocks:
 
   1. News headlines     — Yahoo Finance (institutional framing)
   2. StockTwits messages — retail-trader posts indexed by cashtag, with
                            user-labeled Bullish/Bearish sentiment tags
   3. Reddit posts        — r/wallstreetbets, r/stocks, r/investing
+  4. Chinese social media — 东方财富股吧 / 雪球 / 同花顺 (opt-in via
+                           ``cn_social_sources`` config key)
 
 The agent does not use tool-calling; the data is in the prompt from
 turn 0. Output uses the structured-output pattern (json_schema for
@@ -39,6 +42,7 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.dataflows.cn_social import fetch_cn_social_posts
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
 
@@ -69,6 +73,7 @@ def create_sentiment_analyst(llm):
         news_block = get_news.func(ticker, start_date, end_date)
         stocktwits_block = fetch_stocktwits_messages(ticker, limit=30)
         reddit_block = fetch_reddit_posts(ticker)
+        cn_social_block = fetch_cn_social_posts(ticker)
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -77,6 +82,7 @@ def create_sentiment_analyst(llm):
             news_block=news_block,
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
+            cn_social_block=cn_social_block,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -126,9 +132,26 @@ def _build_system_message(
     news_block: str,
     stocktwits_block: str,
     reddit_block: str,
+    cn_social_block: str = "",
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
-    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
+
+    # Build the optional Chinese social section if data is present.
+    if cn_social_block and cn_social_block.strip():
+        cn_social_section = f"""### Chinese social media — 东方财富股吧 / 雪球 / 同花顺 (past 7 days)
+Retail investor sentiment from major Chinese stock discussion platforms. These are Chinese-language sources that capture domestic sentiment for A-share / China-listed stocks. Analyse alongside the English-language sources, noting any cross-cultural sentiment divergences (e.g., domestic bullish vs. international cautious).
+
+<start_of_cn_social>
+{cn_social_block}
+<end_of_cn_social>
+"""
+    else:
+        cn_social_section = ""
+
+    num_sources = 3 + (1 if cn_social_section else 0)
+    source_desc = f"{'four' if num_sources == 4 else 'three'} complementary data sources"
+
+    return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on {source_desc} that have already been collected for you.
 
 ## Data sources (pre-fetched, in this prompt)
 
@@ -153,6 +176,8 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 {reddit_block}
 <end_of_reddit>
 
+{cn_social_section}
+
 ## How to analyze this data (best practices)
 
 1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
@@ -170,6 +195,8 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 7. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
 
 8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
+
+9. **If Chinese social media data is present, factor in domestic retail sentiment for A-shares.** Domestic retail sentiment on 东方财富股吧 often leads institutional positioning in China-listed stocks. Cross-reference with StockTwits/Reddit for US-listed Chinese ADRs — divergence between domestic (CN) and international (US) sentiment for the same underlying company is a powerful signal. If Chinese social data is empty or absent, note that the analysis is based on non-Chinese sources only and adjust confidence downward for A-share stocks.
 
 ## Output fields
 

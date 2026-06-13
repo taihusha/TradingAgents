@@ -175,25 +175,67 @@ class PortfolioDecision(BaseModel):
     extraction pass is required. Field descriptions double as the model's
     output instructions, so the prompt body only needs to convey context and
     the rating-scale guidance.
+
+    **Dual-horizon design**: Technical, sentiment, and near-term catalysts
+    drive the short-term rating; fundamentals, industry trends, and
+    competitive position drive the long-term rating. The two CAN diverge
+    — that is the whole point (e.g. Underweight short-term on technical
+    weakness while Overweight long-term on a structural growth thesis).
     """
 
     rating: PortfolioRating = Field(
         description=(
-            "The final position rating. Exactly one of Buy / Overweight / Hold / "
-            "Underweight / Sell, picked based on the analysts' debate."
+            "The blended / primary position rating. Exactly one of Buy / "
+            "Overweight / Hold / Underweight / Sell. When short- and long-term "
+            "ratings diverge, lean toward the time horizon most relevant to your "
+            "stated investment style (default: long-term for value investors)."
+        ),
+    )
+    short_term_rating: PortfolioRating = Field(
+        description=(
+            "Short-term tactical rating (1–3 month horizon). Driven primarily by "
+            "technicals (price action, volume, moving averages, momentum), "
+            "near-term sentiment, and imminent catalysts (earnings, product "
+            "launches, policy events). This is the swing-trading / active "
+            "management view."
+        ),
+    )
+    short_term_rationale: str = Field(
+        description=(
+            "Why this short-term rating: 2–4 sentences anchored in specific "
+            "technical signals, sentiment data, and near-term event risk."
+        ),
+    )
+    long_term_rating: PortfolioRating = Field(
+        description=(
+            "Long-term strategic rating (6–18 month horizon). Driven primarily by "
+            "fundamentals (revenue growth, margins, cash flow, ROIC), industry "
+            "trends (technology adoption, regulatory shifts, supply-chain "
+            "evolution), competitive moat, and structural growth catalysts. "
+            "This is the buy-and-hold / value-investing view."
+        ),
+    )
+    long_term_rationale: str = Field(
+        description=(
+            "Why this long-term rating: 2–4 sentences anchored in specific "
+            "fundamental strengths or weaknesses, industry tailwinds/headwinds, "
+            "and the company's competitive position."
         ),
     )
     executive_summary: str = Field(
         description=(
             "A concise action plan covering entry strategy, position sizing, "
-            "key risk levels, and time horizon. Two to four sentences."
+            "key risk levels. Two to four sentences. Acknowledge any divergence "
+            "between short- and long-term views explicitly here."
         ),
     )
     investment_thesis: str = Field(
         description=(
             "Detailed reasoning anchored in specific evidence from the analysts' "
-            "debate. If prior lessons are referenced in the prompt context, "
-            "incorporate them; otherwise rely solely on the current analysis."
+            "debate. Structure in two sections: short-term case first, then "
+            "long-term case. If prior lessons are referenced in the prompt "
+            "context, incorporate them; otherwise rely solely on the current "
+            "analysis."
         ),
     )
     price_target: Optional[float] = Field(
@@ -206,6 +248,18 @@ class PortfolioDecision(BaseModel):
     )
 
 
+def _rating_emoji(rating: PortfolioRating) -> str:
+    """Return an emoji for visual scan of ratings."""
+    _map = {
+        PortfolioRating.BUY: "🟢",
+        PortfolioRating.OVERWEIGHT: "🟢",
+        PortfolioRating.HOLD: "🟡",
+        PortfolioRating.UNDERWEIGHT: "🔴",
+        PortfolioRating.SELL: "🔴",
+    }
+    return _map.get(rating, "⚪")
+
+
 def render_pm_decision(decision: PortfolioDecision) -> str:
     """Render a PortfolioDecision back to the markdown shape the rest of the system expects.
 
@@ -213,9 +267,20 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     so the rendered output preserves the exact section headers (``**Rating**``,
     ``**Executive Summary**``, ``**Investment Thesis**``) that downstream
     parsers and the report writers already handle.
+
+    Dual-horizon output: short-term (1–3m) and long-term (6–18m) ratings
+    are rendered side by side so readers can immediately see any divergence.
     """
+    st_emoji = _rating_emoji(decision.short_term_rating)
+    lt_emoji = _rating_emoji(decision.long_term_rating)
+
     parts = [
         f"**Rating**: {decision.rating.value}",
+        "",
+        f"| 时间维度 | 评级 | 逻辑 |",
+        f"|----------|------|------|",
+        f"| 🏃 **短线** (1–3 月) | {st_emoji} **{decision.short_term_rating.value}** | {decision.short_term_rationale} |",
+        f"| 🏔️ **长线** (6–18 月) | {lt_emoji} **{decision.long_term_rating.value}** | {decision.long_term_rationale} |",
         "",
         f"**Executive Summary**: {decision.executive_summary}",
         "",
