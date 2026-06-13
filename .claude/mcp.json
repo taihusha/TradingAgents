@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "tradingagents": {
+      "command": ".venv/Scripts/python",
+      "args": ["mcp_server.py"],
+      "cwd": "E:/codex-workspace/projects/TradingAgents",
+      "env": {
+        "PYTHONIOENCODING": "utf-8",
+        "TRADINGAGENTS_LLM_PROVIDER": "deepseek",
+        "TRADINGAGENTS_DEEP_THINK_LLM": "deepseek-v4-pro",
+        "TRADINGAGENTS_QUICK_THINK_LLM": "deepseek-v4-flash",
+        "TRADINGAGENTS_CN_SOCIAL_SOURCES": "eastmoney_guba,eastmoney_sentiment"
+      }
+    }
+  }
+}
