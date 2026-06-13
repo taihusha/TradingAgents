@@ -55,6 +55,8 @@
 | **新闻品质过滤** | 垃圾广告过滤 → 低质内容剔除 → 标题查重（token 重叠 + SequenceMatcher）→ 品质评分排序 | `dataflows/cn_news.py` |
 | **并行多标的分析** | ThreadPoolExecutor 并行分析（默认 3 并发），每 worker 独立 TradingAgentsGraph 实例，线程安全日志 | `weekly_analysis.py` |
 | **Token 成本追踪** | LangChain callback 自动记录每次 LLM 调用的 token 消耗和费用，输出按模型汇总的成本报告 | `utils/token_tracker.py` |
+| **主动选股 / 机会发现** | 行业/概念/全市场扫描 → 财务指标快照 → LLM 6 维评分排序 → 输出候选 Watchlist | `cn_screener.py`, `discovery_analyst.py`, `discover_stocks.py` |
+| **跨标的比较分析** | 周度分析后按行业分组 → LLM 多维度对标（产业链/财务/估值/成长/风险）→ 综合排名 + 仓位建议 | `comparison_analyst.py`, `weekly_analysis.py` |
 
 ### ⚠️ 部分具备
 
@@ -69,8 +71,6 @@
 
 | 功能 | 说明 | 对标参考 |
 |------|------|---------|
-| **主动选股 / 机会发现** | 系统只分析已有持仓，不主动发现新标的 | 3S-Trader 6 维评分选股、国金 CoT 投票 |
-| **跨标的横向比较** | 同行业多标的分开分析，无相对优劣排序 | AlphaAgents 多 Agent 排序共识 |
 | **历史学习反馈** | 复盘结果不反馈到下一次分析的 prompt | 国金证券"逻辑动量"滚动回测 |
 | **模拟交易 / 回测** | 无可视化虚拟盘 | TradingAgents-CN 内置虚拟交易环境 |
 | **Web UI** | 纯 CLI | TradingAgents-CN FastAPI + Vue 3 |
