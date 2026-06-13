@@ -262,6 +262,7 @@ def main():
 
     # 2. Run analysis in parallel
     success, failed = [], []
+    results = []  # (folder_name, ticker, state) for post-analysis comparison
     t_start = time.perf_counter()
     completed = 0
     total = len(holdings)
@@ -285,6 +286,7 @@ def main():
                 report = build_report(ticker, folder_name, analysis_date, state)
                 save_report(folder_name, analysis_date, report)
                 success.append(folder_name)
+                results.append((folder_name, ticker, state))
                 log(f"  [{completed}/{total}] ✅ {folder_name} ({ticker}) — report saved")
             except Exception as e:
                 log(f"  [{completed}/{total}] ❌ {folder_name} ({ticker}) FAILED: {type(e).__name__}: {e}")
@@ -311,6 +313,110 @@ def main():
 
     # 4. Token cost summary
     log("\n" + tracker.summary())
+
+    # 5. Cross-stock comparison by industry
+    if len(results) >= 2:
+        log("\n" + "=" * 60)
+        log("CROSS-STOCK COMPARISON")
+        log("=" * 60)
+        _run_comparisons(results, analysis_date, tracker)
+
+
+def _extract_industry(state: dict) -> str:
+    """Extract industry classification from a TradingAgents state.
+
+    Tries fundamentals report first (has Sector/Industry from yfinance),
+    falls back to market report.
+    """
+    import re
+
+    # Check fundamentals report
+    fund = state.get("fundamentals_report", "")
+    if fund:
+        # Look for "Sector: ..." and "Industry: ..." lines
+        sec_m = re.search(r"Sector:\s*(.+)", fund)
+        ind_m = re.search(r"Industry:\s*(.+)", fund)
+        if ind_m:
+            return ind_m.group(1).strip()
+        if sec_m:
+            return sec_m.group(1).strip()
+
+    # Check market report
+    market = state.get("market_report", "")
+    if market:
+        sec_m = re.search(r"Sector:\s*(.+)", market)
+        ind_m = re.search(r"Industry:\s*(.+)", market)
+        if ind_m:
+            return ind_m.group(1).strip()
+        if sec_m:
+            return sec_m.group(1).strip()
+
+    return "未分类"
+
+
+def _run_comparisons(
+    results: list[tuple[str, str, dict]],
+    analysis_date: str,
+    tracker=None,  # Optional TokenTracker
+):
+    """Run cross-stock comparison for each industry group with 2+ stocks."""
+    from tradingagents.agents.analysts.comparison_analyst import create_comparison_analyst
+    from tradingagents.llm_clients.factory import create_llm_client
+    from tradingagents.default_config import DEFAULT_CONFIG
+    from tradingagents.utils.token_tracker import TokenTracker
+
+    # Group by industry
+    groups: dict[str, list[tuple[str, str, str]]] = {}
+    for folder_name, ticker, state in results:
+        industry = _extract_industry(state)
+        decision = state.get("final_trade_decision", "")
+        if industry not in groups:
+            groups[industry] = []
+        groups[industry].append((ticker, folder_name, decision))
+
+    # Filter to groups with 2+ stocks
+    comparable = {k: v for k, v in groups.items() if len(v) >= 2}
+    if not comparable:
+        log("  (no industry groups with 2+ stocks for comparison)")
+        return
+
+    log(f"  Comparing {len(comparable)} industry groups: {list(comparable.keys())}")
+
+    # Create LLM for comparison (use quick-thinking model)
+    config = DEFAULT_CONFIG.copy()
+    client = create_llm_client(
+        provider=config["llm_provider"],
+        model=config["quick_think_llm"],
+        base_url=config.get("backend_url"),
+    )
+    llm = client.get_llm()
+
+    comparison_tracker = TokenTracker()
+    callbacks = [comparison_tracker]
+    if tracker:
+        callbacks.append(tracker)
+
+    compare = create_comparison_analyst(llm)
+
+    for industry, stocks in comparable.items():
+        log(f"  Comparing {len(stocks)} stocks in: {industry}")
+        try:
+            report = compare(stocks, industry=industry)
+
+            # Save comparison report
+            safe_ind = industry.replace("/", "-").replace(" ", "_")
+            report_path = HOLDINGS_DIR / f"_comparisons/{analysis_date}_{safe_ind}.md"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write(f"# 跨标的比较 — {industry}\n")
+                f.write(f"**日期**: {analysis_date}\n\n")
+                f.write(report)
+
+            log(f"    ✅ Comparison saved: {report_path}")
+        except Exception as e:
+            log(f"    ❌ Comparison failed for {industry}: {type(e).__name__}: {e}")
+
+    log("\n" + comparison_tracker.summary())
 
 
 if __name__ == "__main__":
