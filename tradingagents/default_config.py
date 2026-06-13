@@ -113,11 +113,13 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # automatically. Example: ["eastmoney_guba", "xueqiu"]
     "cn_social_sources": [],
     # Data vendor configuration
-    # Category-level configuration (default for all tools in category)
+    # Category-level configuration (default for all tools in category).
+    # For fundamental data, the router tries yfinance first (good for US/HK
+    # stocks), then falls back to akshare for A-share coverage.
     "data_vendors": {
         "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
         "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
+        "fundamental_data": "yfinance,akshare",  # yfinance first, akshare fallback for A-shares
         "news_data": "yfinance",             # Options: alpha_vantage, yfinance
     },
     # Tool-level configuration (takes precedence over category-level)
