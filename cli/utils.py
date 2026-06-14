@@ -24,6 +24,17 @@ ANALYST_ORDER = [
 CRYPTO_SUFFIXES = ("-USD", "-USDT", "-USDC", "-BTC", "-ETH")
 
 
+def is_valid_ticker_input(value: str) -> bool:
+    """Whether a ticker entry is acceptable (charset + length).
+
+    Allows the characters Yahoo symbols use, including ``=`` for futures/forex
+    like ``GC=F`` and ``EURUSD=X`` (#980), and ``^`` for indices. Empty input is
+    allowed (it defaults to SPY downstream).
+    """
+    v = value.strip()
+    return not v or (all(ch.isalnum() or ch in "._-^=" for ch in v) and len(v) <= 32)
+
+
 def get_ticker() -> str:
     """Prompt the user to enter a ticker symbol, preserving exchange suffixes.
 
@@ -34,9 +45,8 @@ def get_ticker() -> str:
     ticker = questionary.text(
         f"Enter ticker symbol (e.g. {TICKER_INPUT_EXAMPLES}):",
         validate=lambda x: (
-            not x.strip()
-            or (all(ch.isalnum() or ch in "._-^" for ch in x.strip()) and len(x.strip()) <= 32)
-            or "Please enter a valid ticker symbol, e.g. AAPL, 000404.SZ, 0700.HK."
+            is_valid_ticker_input(x)
+            or "Please enter a valid ticker symbol, e.g. AAPL, 000404.SZ, 0700.HK, GC=F."
         ),
         style=questionary.Style(
             [
@@ -54,13 +64,26 @@ def get_ticker() -> str:
 
 
 def normalize_ticker_symbol(ticker: str) -> str:
-    """Normalize ticker input while preserving exchange suffixes."""
-    return ticker.strip().upper()
+    """Resolve user input to its canonical Yahoo symbol (single source of truth).
+
+    Delegates to the data layer's ``normalize_symbol`` so the symbol the CLI
+    passes through the pipeline is exactly the one the data path will price
+    (e.g. ``BTCUSD`` -> ``BTC-USD``, ``XAUUSD`` -> ``GC=F``). Falls back to the
+    plain upper-case if the data layer is unavailable.
+    """
+    try:
+        from tradingagents.dataflows.symbol_utils import normalize_symbol
+
+        return normalize_symbol(ticker)
+    except Exception:
+        return ticker.strip().upper()
 
 
 def detect_asset_type(ticker: str) -> AssetType:
-    normalized_ticker = ticker.strip().upper()
-    if normalized_ticker.endswith(CRYPTO_SUFFIXES):
+    """Classify on the canonical symbol so e.g. BTCUSD and BTC-USDT both read as
+    crypto (#981/#982), matching what the data path will actually fetch."""
+    canonical = normalize_ticker_symbol(ticker)
+    if canonical.endswith(CRYPTO_SUFFIXES):
         return AssetType.CRYPTO
     return AssetType.STOCK
 
@@ -288,8 +311,14 @@ def _llm_provider_table() -> list[tuple[str, str, str | None]]:
         ("GLM", "glm", "https://open.bigmodel.cn/api/paas/v4/"),
         ("MiniMax", "minimax", "https://api.minimax.io/v1"),
         ("OpenRouter", "openrouter", "https://openrouter.ai/api/v1"),
+        ("Mistral", "mistral", "https://api.mistral.ai/v1"),
+        ("Kimi (Moonshot)", "kimi", "https://api.moonshot.ai/v1"),
+        ("Groq", "groq", "https://api.groq.com/openai/v1"),
+        ("NVIDIA NIM", "nvidia", "https://integrate.api.nvidia.com/v1"),
         ("Azure OpenAI", "azure", None),
+        ("Amazon Bedrock", "bedrock", None),
         ("Ollama", "ollama", ollama_url),
+        ("OpenAI-compatible (vLLM, LM Studio, llama.cpp, custom relay)", "openai_compatible", None),
     ]
 
 
@@ -300,6 +329,33 @@ def provider_default_url(provider_key: str) -> str | None:
         if pk == key:
             return url
     return None
+
+
+def resolve_backend_url(
+    provider: str, menu_url: str | None = None, env_url: str | None = None
+) -> str | None:
+    """Resolve the backend URL with the correct precedence.
+
+    An explicit env override (``env_url``, from ``TRADINGAGENTS_LLM_BACKEND_URL``
+    via ``DEFAULT_CONFIG['backend_url']``) is honored regardless of how the
+    provider was chosen — interactively or from the environment (#978).
+    Otherwise the menu/region URL, then the provider's default.
+    """
+    return env_url or menu_url or provider_default_url(provider)
+
+
+def prompt_openai_compatible_url() -> str:
+    """Prompt for a custom OpenAI-compatible endpoint base URL."""
+    url = questionary.text(
+        "Enter the OpenAI-compatible base URL "
+        "(e.g. http://localhost:8000/v1 for vLLM, http://localhost:1234/v1 for LM Studio):",
+        validate=lambda x: x.strip().startswith(("http://", "https://"))
+        or "Enter a URL starting with http:// or https://",
+    ).ask()
+    if not url:
+        console.print("\n[red]No endpoint URL provided. Exiting...[/red]")
+        exit(1)
+    return url.strip()
 
 
 def select_llm_provider() -> tuple[str, str | None]:
@@ -475,7 +531,7 @@ def confirm_ollama_endpoint(url: str) -> None:
 
     Surfaces three things the user benefits from seeing before model
     selection: which URL we'll actually hit, where it came from
-    (\`OLLAMA_BASE_URL\` vs default), and a soft warning if the URL is
+    (`OLLAMA_BASE_URL` vs default), and a soft warning if the URL is
     missing the scheme/port that ollama-serve expects. The warning is
     advisory only — we don't reject malformed input, since the user may
     be doing something deliberately unusual (e.g. a reverse-proxy path).
@@ -514,6 +570,13 @@ def ensure_api_key(provider: str) -> Optional[str]:
     env_var = get_api_key_env(provider)
     if env_var is None:
         return None  # ollama / unknown — no key check possible
+
+    # Key-optional providers (generic OpenAI-compatible / local servers) read the
+    # key when present but must never force an interactive prompt.
+    from tradingagents.llm_clients.openai_client import OPENAI_COMPATIBLE_PROVIDERS
+    spec = OPENAI_COMPATIBLE_PROVIDERS.get(provider.lower())
+    if spec is not None and spec.key_optional:
+        return os.environ.get(env_var)
 
     existing = os.environ.get(env_var)
     if existing:

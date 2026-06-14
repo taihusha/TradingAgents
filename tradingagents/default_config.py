@@ -114,13 +114,17 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "cn_social_sources": [],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
-    # For fundamental data, the router tries yfinance first (good for US/HK
-    # stocks), then falls back to akshare for A-share coverage.
+    # The configured value is the exact vendor chain — requests are NOT silently
+    # routed to vendors you didn't choose. For ordered fallback, list several,
+    # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
+    # Our fork adds akshare (A-share) and baostock (free stable fallback).
     "data_vendors": {
         "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
         "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
         "fundamental_data": "yfinance,akshare,baostock",  # yfinance → akshare → baostock (stable free fallback)
         "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
+        "prediction_markets": "polymarket",  # Options: polymarket (keyless)
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {

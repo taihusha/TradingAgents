@@ -19,6 +19,8 @@ PROVIDER_API_KEY_ENV: dict[str, Optional[str]] = {
     "anthropic":  "ANTHROPIC_API_KEY",
     "google":     "GOOGLE_API_KEY",
     "azure":      "AZURE_OPENAI_API_KEY",
+    # Bedrock authenticates via the AWS credential chain, not a single key env.
+    "bedrock":    None,
     "xai":        "XAI_API_KEY",
     "deepseek":   "DEEPSEEK_API_KEY",
     # Dual-region providers each carry their own account; keys are not
@@ -30,8 +32,18 @@ PROVIDER_API_KEY_ENV: dict[str, Optional[str]] = {
     "minimax":    "MINIMAX_API_KEY",
     "minimax-cn": "MINIMAX_CN_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    # Additional hosted OpenAI-compatible providers (model is user-specified).
+    # kimi -> Moonshot AI; nvidia -> NVIDIA NIM.
+    "mistral":    "MISTRAL_API_KEY",
+    "kimi":       "MOONSHOT_API_KEY",
+    "groq":       "GROQ_API_KEY",
+    "nvidia":     "NVIDIA_API_KEY",
     # Local runtimes do not authenticate.
     "ollama":     None,
+    # Generic OpenAI-compatible endpoint: the client reads this when set (keyed
+    # relays), but it is marked key-optional in the provider registry so the CLI
+    # never forces a prompt and keyless local servers still work.
+    "openai_compatible": "OPENAI_COMPATIBLE_API_KEY",
 }
 
 
