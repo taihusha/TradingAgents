@@ -11,6 +11,7 @@ from .alpha_vantage import (
     get_news as get_alpha_vantage_news,
     get_stock as get_alpha_vantage_stock,
 )
+from ._browser_session import is_akshare_blocked, record_akshare_failure
 from .baostock_fundamentals import (
     get_balance_sheet as get_baostock_balance_sheet,
     get_cashflow as get_baostock_cashflow,
@@ -211,6 +212,14 @@ def route_to_vendor(method: str, *args, **kwargs):
     last_no_data: NoMarketDataError | None = None
     first_error: Exception | None = None
     for vendor in vendor_chain:
+        # ── Circuit breaker: skip akshare after N consecutive failures ──
+        if vendor == "akshare" and is_akshare_blocked():
+            logger.info(
+                "akshare circuit breaker open — skipping akshare for %s (trying next vendor)",
+                method,
+            )
+            continue
+
         vendor_impl = VENDOR_METHODS[method][vendor]
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
@@ -218,6 +227,8 @@ def route_to_vendor(method: str, *args, **kwargs):
             return impl_func(*args, **kwargs)
         except VendorRateLimitError:
             logger.warning("Vendor %r rate-limited for %s; trying next vendor.", vendor, method)
+            if vendor == "akshare":
+                record_akshare_failure()
             continue
         except VendorNotConfiguredError as e:
             logger.warning("Vendor %r not configured for %s; trying next vendor.", vendor, method)
@@ -226,6 +237,8 @@ def route_to_vendor(method: str, *args, **kwargs):
             continue
         except NoMarketDataError as e:
             last_no_data = e  # No data here; another configured vendor may have it
+            if vendor == "akshare":
+                record_akshare_failure()
             continue
         except Exception as e:
             # Don't let one vendor's failure crash the call when another can
@@ -234,6 +247,8 @@ def route_to_vendor(method: str, *args, **kwargs):
             logger.warning("Vendor %r failed for %s: %s", vendor, method, e)
             if first_error is None:
                 first_error = e
+            if vendor == "akshare":
+                record_akshare_failure()
             continue
 
     # If any vendor reported "no data", the symbol is genuinely unavailable.

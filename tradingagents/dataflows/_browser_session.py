@@ -6,16 +6,25 @@ monkey-patches ``requests.Session`` globally so that **every** akshare
 call (and any other library using ``requests`` in this process) presents a
 real browser TLS handshake via ``curl_cffi``.
 
-Two tiers (auto-selected):
-- **curl_cffi available** — replace ``requests.Session`` with
-  ``curl_cffi.requests.Session``, which impersonates Chrome 110 at
-  the TLS level.  This is the most robust option.
-- **curl_cffi unavailable** — fall back to injecting browser-style
-  HTTP headers into every ``Session.request`` call.  Helps with
-  basic UA filtering but does NOT fix TLS-fingerprint blocks.
+Three tiers (stacked):
+1. **UA header injection** (auto) — browser headers on every request.
+   Handles basic UA filtering. Compatible with everything.
+2. **Default timeout** (auto) — 15-second timeout on every request.
+   Prevents TCP hangs when Eastmoney silently black-holes connections
+   from banned IPs (the OS default is 60-120s per dead connection).
+3. **curl_cffi TLS replacement** (opt-in via ``enable_curl_cffi()``) —
+   real browser TLS fingerprint (Chrome 110), but may be incompatible
+   with akshare's ``mount()`` + ``params`` request pattern.
 
-Import this module early (before any akshare import) to apply the patch.
-Safe to import multiple times — the patch runs at most once.
+Circuit breaker
+---------------
+``record_akshare_failure()`` / ``is_akshare_blocked()`` let the vendor
+layer skip akshare entirely after N consecutive failures within one
+process lifetime.  Call ``is_akshare_blocked()`` before attempting an
+akshare call; call ``record_akshare_failure()`` when one fails.
+
+Import this module early (before any akshare import) to apply the patches.
+Safe to import multiple times — the patches run at most once.
 """
 
 from __future__ import annotations
@@ -25,6 +34,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 _patch_applied = False
+
+_DEFAULT_TIMEOUT = 15  # seconds — cuts TCP hang from OS-default 60-120s
 
 _BROWSER_HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -36,6 +47,37 @@ _BROWSER_HEADERS: dict[str, str] = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": "https://data.eastmoney.com/",
 }
+
+# ── Circuit breaker for akshare ──────────────────────────────────────────
+# After _AKSHARE_BREAKER_THRESHOLD consecutive failures in one process
+# lifetime, skip akshare entirely — every second spent waiting on a
+# banned IP is a second the user could have had results from baostock.
+
+_AKSHARE_FAILURE_COUNT = 0
+_AKSHARE_BREAKER_THRESHOLD = 3
+
+
+def record_akshare_failure():
+    """Increment the akshare failure counter."""
+    global _AKSHARE_FAILURE_COUNT
+    _AKSHARE_FAILURE_COUNT += 1
+    if _AKSHARE_FAILURE_COUNT >= _AKSHARE_BREAKER_THRESHOLD:
+        logger.warning(
+            "akshare circuit breaker OPEN — %d consecutive failures. "
+            "Skipping akshare for remaining calls this run.",
+            _AKSHARE_FAILURE_COUNT,
+        )
+
+
+def is_akshare_blocked() -> bool:
+    """Return True when akshare should be skipped (too many failures)."""
+    return _AKSHARE_FAILURE_COUNT >= _AKSHARE_BREAKER_THRESHOLD
+
+
+def _reset_circuit_breaker():
+    """Reset the breaker (exposed for testing only)."""
+    global _AKSHARE_FAILURE_COUNT
+    _AKSHARE_FAILURE_COUNT = 0
 
 
 def _apply_curl_cffi_patch():
@@ -72,13 +114,26 @@ def _apply_curl_cffi_patch():
 
 
 def _apply_ua_header_patch():
-    """Inject browser headers into every ``Session.request`` call."""
+    """Inject browser headers + default timeout into every ``Session.request`` call.
+
+    The timeout prevents TCP hangs when Eastmoney CDN silently drops
+    connections from banned IPs (OS default = 60-120s per connection).
+    With 6+ akshare calls per run, this saves minutes of dead waiting.
+    """
     try:
         import requests as _requests
 
         _original_request = _requests.Session.request
 
         def _patched_request(self, method, url, **kwargs):
+            # ── Timeout guard (prevent TCP-level hangs) ──
+            # akshare never passes a timeout, so every Eastmoney call
+            # would otherwise use the OS default (60-120s on Windows).
+            # A single dead connection wastes up to 2 minutes; the
+            # fundamentals analyst alone makes 6+ akshare calls.
+            kwargs.setdefault("timeout", _DEFAULT_TIMEOUT)
+
+            # ── Browser header injection ──
             headers = kwargs.get("headers")
             if headers is None:
                 headers = {}
@@ -89,7 +144,10 @@ def _apply_ua_header_patch():
             return _original_request(self, method, url, **kwargs)
 
         _requests.Session.request = _patched_request  # type: ignore[method-assign]
-        logger.debug("UA: browser headers injected into requests.Session.request")
+        logger.debug(
+            "UA: browser headers + %ds timeout injected into requests.Session.request",
+            _DEFAULT_TIMEOUT,
+        )
         return True
     except Exception:
         return False
@@ -99,8 +157,9 @@ def inject_browser_session():
     """Apply the best available browser-session patch (one-shot).
 
     Strategy (in priority order):
-    1. UA header injection — always applied.  Handles basic UA filtering
-       and is fully compatible with akshare's Session usage patterns.
+    1. UA header injection + default timeout — always applied.  Handles
+       basic UA filtering and prevents TCP hangs (15s timeout vs OS
+       default 60-120s).  Fully compatible with akshare's usage patterns.
     2. curl_cffi TLS replacement — **opt-in via ``enable_curl_cffi()``**.
        Provides real browser TLS fingerprint (Chrome 110) for extra
        anti-detection, but may cause edge-case issues with akshare's
@@ -132,4 +191,5 @@ def enable_curl_cffi():
 
 
 # ── Apply at import time ─────────────────────────────────────────────────────
+# UA headers + 15s timeout are auto-applied; curl_cffi is opt-in only.
 inject_browser_session()
