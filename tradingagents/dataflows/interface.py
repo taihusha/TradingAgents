@@ -28,6 +28,12 @@ from .cn_fundamentals import (
     get_cashflow as get_akshare_cashflow,
     get_income_statement as get_akshare_income_statement,
 )
+from .baostock_fundamentals import (
+    get_fundamentals as get_baostock_fundamentals,
+    get_balance_sheet as get_baostock_balance_sheet,
+    get_cashflow as get_baostock_cashflow,
+    get_income_statement as get_baostock_income_statement,
+)
 from .alpha_vantage_common import AlphaVantageRateLimitError
 from .symbol_utils import NoMarketDataError
 from .cn_news import fetch_cn_news
@@ -72,6 +78,7 @@ VENDOR_LIST = [
     "yfinance",
     "alpha_vantage",
     "akshare",
+    "baostock",
 ]
 
 # Mapping of methods to their vendor-specific implementations
@@ -91,21 +98,25 @@ VENDOR_METHODS = {
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
         "akshare": get_akshare_fundamentals,
+        "baostock": get_baostock_fundamentals,
     },
     "get_balance_sheet": {
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
         "akshare": get_akshare_balance_sheet,
+        "baostock": get_baostock_balance_sheet,
     },
     "get_cashflow": {
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
         "akshare": get_akshare_cashflow,
+        "baostock": get_baostock_cashflow,
     },
     "get_income_statement": {
         "alpha_vantage": get_alpha_vantage_income_statement,
         "yfinance": get_yfinance_income_statement,
         "akshare": get_akshare_income_statement,
+        "baostock": get_baostock_income_statement,
     },
     # news_data
     "get_news": {

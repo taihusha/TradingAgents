@@ -22,17 +22,15 @@ logger = logging.getLogger(__name__)
 # Minimum meaningful market cap (yuan) — filters out shell/micro-cap noise
 DEFAULT_MIN_MARKET_CAP = 5_000_000_000  # 5B
 
-# ── Network note ───────────────────────────────────────────────────────────
-# Eastmoney APIs (emweb.securities.eastmoney.com) may be unreachable from
-# outside mainland China. All functions below degrade gracefully: they
-# return empty lists on connection errors rather than raising. For
-# reliable access, deploy behind a China-side proxy or on a domestic VPS.
-# The `stock_zh_a_spot_em` endpoint (push2his.eastmoney.com) generally
-# has wider reach than the board/industry endpoints.
+# ── Browser TLS session injection (shared across all akshare modules) ────────
+# Replaces requests.Session with curl_cffi.Session (Chrome 110 TLS fingerprint)
+# or falls back to UA header injection.  Import-only side effect — safe to
+# repeat across modules (one-shot patch).
+from ._browser_session import inject_browser_session  # noqa: E402, F401
 
 
 def _ensure_akshare():
-    """Import akshare or raise."""
+    """Import akshare or raise (browser UA already patched at import time)."""
     try:
         import akshare as ak
         return ak
@@ -49,9 +47,69 @@ def _is_st_stock(name: str, ticker: str) -> bool:
     return False
 
 
+def _safe_float(row, col_idx: int) -> float | None:
+    """Extract a float from a pandas row by column index, returning None on failure."""
+    try:
+        if col_idx >= len(row):
+            return None
+        v = row.iloc[col_idx]
+        return float(v) if v is not None and str(v) not in ("nan", "", "None") else None
+    except (ValueError, TypeError):
+        return None
+
+
 def _bare_code(ticker: str) -> str:
     """Strip exchange suffix: '000933.SZ' → '000933'."""
     return ticker.upper().replace(".SZ", "").replace(".SS", "")
+
+
+def _parse_constituent_df(
+    df,
+    min_market_cap: float,
+    exclude_st: bool,
+    codes_seen: set[str] | None = None,
+) -> list[dict]:
+    """Parse an industry/concept constituent DataFrame into stock dicts.
+
+    Columns expected (``stock_board_industry_cons_em`` / ``stock_board_concept_cons_em``):
+      0: 代码  1: 名称  2: 最新价  3: 涨跌幅  6: 换手率  12: 总市值
+
+    Returns list of dicts with ticker, code, name, price, change_pct,
+    market_cap, turnover.  PE/PB are set to None (not available from
+    the constituent API — callers that need them must enrich separately).
+    """
+    results: list[dict] = []
+    if codes_seen is None:
+        codes_seen = set()
+
+    for _, row in df.iterrows():
+        code = str(row.iloc[0]).zfill(6)
+        if code in codes_seen:
+            continue
+        codes_seen.add(code)
+
+        name = str(row.iloc[1]) if len(row) > 1 else ""
+        if exclude_st and _is_st_stock(name, code):
+            continue
+
+        market_cap = _safe_float(row, 12)
+        if market_cap is None or market_cap < min_market_cap:
+            continue
+
+        suffix = "SH" if code.startswith("6") else "SZ"
+        results.append({
+            "ticker": f"{code}.{suffix}",
+            "code": code,
+            "name": name,
+            "price": _safe_float(row, 2),
+            "change_pct": _safe_float(row, 3),
+            "pe": None,       # not in constituent API
+            "pb": None,       # not in constituent API
+            "market_cap": market_cap,
+            "turnover": _safe_float(row, 6),
+        })
+
+    return results
 
 
 def get_industry_list() -> list[dict[str, str]]:
@@ -79,90 +137,29 @@ def get_industry_list() -> list[dict[str, str]]:
 def get_industry_stocks(industry_name: str) -> list[dict]:
     """Get all stocks in an Eastmoney industry with basic metrics.
 
-    Uses ``stock_board_industry_cons_em`` for constituent list, then
-    enriches with real-time metrics from ``stock_zh_a_spot_em``.
+    Uses ``stock_board_industry_cons_em`` directly — the constituent API
+    already includes price, change%, market cap, and turnover.  PE and PB
+    are NOT available from this endpoint; callers that need them should
+    enrich via ``get_financial_snapshots()`` or a targeted spot-data lookup.
 
     Returns a list of dicts with keys: ticker, name, price, change_pct,
-    pe, pb, market_cap, volume, turnover.
+    pe (None), pb (None), market_cap, turnover.
     """
     ak = _ensure_akshare()
-    results: list[dict] = []
-
-    # Step 1: Get constituent tickers
     try:
-        df_cons = ak.stock_board_industry_cons_em(symbol=industry_name)
-        if df_cons is None or df_cons.empty:
+        df = ak.stock_board_industry_cons_em(symbol=industry_name)
+        if df is None or df.empty:
             return []
-        # Columns: 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, ...
-        constituent_tickers = set()
-        for _, row in df_cons.iterrows():
-            code = str(row.iloc[0]) if len(row) > 0 else ""
-            if code and re.match(r"^\d{6}$", code):
-                constituent_tickers.add(code)
     except Exception as exc:
         logger.warning("Industry constituents failed for %s: %s", industry_name, exc)
         return []
 
-    if not constituent_tickers:
-        return []
-
-    # Step 2: Enrich with real-time spot data
-    try:
-        df_spot = ak.stock_zh_a_spot_em()
-        if df_spot is None or df_spot.empty:
-            return []
-    except Exception as exc:
-        logger.warning("Spot data fetch failed: %s", exc)
-        return []
-
-    # Build lookup: ticker → row index
-    # Columns are: 代码, 名称, 最新价, 涨跌幅, 涨跌额, 成交量, 成交额, 振幅,
-    #              换手率, 量比, 市盈率-动态, 市净率, 总市值, 流通市值, ...
-    for _, row in df_spot.iterrows():
-        try:
-            code = str(row.iloc[0]).zfill(6) if len(row) > 0 else ""
-        except (ValueError, TypeError):
-            continue
-        if code not in constituent_tickers:
-            continue
-
-        name = str(row.iloc[1]) if len(row) > 1 else ""
-        if _is_st_stock(name, code):
-            continue
-
-        # Extract metrics safely
-        try:
-            price = float(row.iloc[2]) if len(row) > 2 else None
-        except (ValueError, TypeError):
-            price = None
-        try:
-            change_pct = float(row.iloc[3]) if len(row) > 3 else None
-        except (ValueError, TypeError):
-            change_pct = None
-        try:
-            pe = float(row.iloc[10]) if len(row) > 10 else None
-        except (ValueError, TypeError):
-            pe = None
-        try:
-            pb = float(row.iloc[11]) if len(row) > 11 else None
-        except (ValueError, TypeError):
-            pb = None
-        try:
-            market_cap = float(row.iloc[12]) if len(row) > 12 else None
-        except (ValueError, TypeError):
-            market_cap = None
-
-        results.append({
-            "ticker": f"{code}.{'SH' if code.startswith('6') else 'SZ'}",
-            "code": code,
-            "name": name,
-            "price": price,
-            "change_pct": change_pct,
-            "pe": pe,
-            "pb": pb,
-            "market_cap": market_cap,
-        })
-
+    results = _parse_constituent_df(
+        df,
+        min_market_cap=0,   # no min-cap filter for raw listing
+        exclude_st=True,
+    )
+    results.sort(key=lambda x: x.get("market_cap") or 0, reverse=True)
     return results
 
 
@@ -176,11 +173,19 @@ def screen_stocks(
 ) -> list[dict]:
     """Screen A-share stocks by multiple criteria.
 
+    When *industry* or *concept* is given, data is sourced directly from
+    the Eastmoney board constituent API (fast: one HTTP call per board).
+    ``stock_zh_a_spot_em`` (all ~5000 A-shares) is only used for
+    broad-market screening when neither filter is provided.
+
+    Note: PE/PB filtering is only available in broad-market mode because
+    the constituent API does not include PE/PB columns.
+
     Args:
         industry: Eastmoney industry name (e.g. "汽车零部件").
         concept: Eastmoney concept board name (e.g. "机器人概念").
         min_market_cap: Minimum total market cap in yuan.
-        max_pe: Maximum PE ratio (excludes negative-PE stocks).
+        max_pe: Maximum PE ratio (broad-market mode only).
         min_roe: Minimum ROE (requires financial snapshot lookup).
         exclude_st: Exclude ST/*ST/delisting-risk stocks.
 
@@ -188,17 +193,20 @@ def screen_stocks(
         List of stock dicts sorted by market cap descending.
     """
     ak = _ensure_akshare()
+    results: list[dict] = []
+    codes_seen: set[str] = set()
+    has_filter = bool(industry or concept)
+    constituent_ok = False
 
-    # Build candidate ticker set
-    candidate_tickers: set[str] = set()
-
+    # ── Fast path: industry / concept constituent data ──
     if industry:
         try:
             df = ak.stock_board_industry_cons_em(symbol=industry)
             if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    code = str(row.iloc[0]).zfill(6)
-                    candidate_tickers.add(code)
+                results.extend(
+                    _parse_constituent_df(df, min_market_cap, exclude_st, codes_seen)
+                )
+                constituent_ok = True
         except Exception as exc:
             logger.warning("Industry '%s' lookup failed: %s", industry, exc)
 
@@ -206,66 +214,68 @@ def screen_stocks(
         try:
             df = ak.stock_board_concept_cons_em(symbol=concept)
             if df is not None and not df.empty:
-                for _, row in df.iterrows():
-                    code = str(row.iloc[0]).zfill(6)
-                    candidate_tickers.add(code)
+                results.extend(
+                    _parse_constituent_df(df, min_market_cap, exclude_st, codes_seen)
+                )
+                constituent_ok = True
         except Exception as exc:
             logger.warning("Concept '%s' lookup failed: %s", concept, exc)
 
-    # If no filter specified, screen all A-shares
-    screen_all = not candidate_tickers
+    if constituent_ok:
+        results.sort(key=lambda x: x.get("market_cap") or 0, reverse=True)
+        return results
 
-    # Fetch real-time spot data for all A-shares
+    # ── Fallback: if a filter was given but constituent API(s) failed,
+    #     fall through to the broad-market path with ticker-based filtering ──
+    if has_filter and not constituent_ok:
+        if not codes_seen:
+            # Both constituent APIs failed — we have no ticker list to filter with.
+            # Returning all ~5000 unfiltered stocks is useless; fail cleanly.
+            logger.warning(
+                "Both industry/concept constituent APIs are unreachable. "
+                "Eastmoney board endpoints (emweb.securities.eastmoney.com) "
+                "may be blocked from your region. Consider running behind a "
+                "mainland China proxy or on a domestic VPS."
+            )
+            return []
+        logger.info(
+            "Constituent API partially failed; "
+            "falling back to full-market scan with %d known tickers",
+            len(codes_seen),
+        )
+
+    # ── Broad-market path: scan all A-shares ──
     try:
         df_spot = ak.stock_zh_a_spot_em()
         if df_spot is None or df_spot.empty:
             return []
     except Exception as exc:
         logger.warning("Spot data fetch failed: %s", exc)
+        if has_filter:
+            logger.warning(
+                "Both constituent and spot APIs are unreachable. "
+                "Eastmoney endpoints may be blocked from your region. "
+                "Consider running behind a mainland China proxy or on a domestic VPS."
+            )
         return []
 
-    results: list[dict] = []
     for _, row in df_spot.iterrows():
         try:
             code = str(row.iloc[0]).zfill(6)
         except (ValueError, TypeError):
             continue
-        if not screen_all and code not in candidate_tickers:
+        if codes_seen and code not in codes_seen:
             continue
 
         name = str(row.iloc[1]) if len(row) > 1 else ""
         if exclude_st and _is_st_stock(name, code):
             continue
 
-        # Extract metrics
-        try:
-            price = float(row.iloc[2]) if len(row) > 2 else None
-        except (ValueError, TypeError):
-            price = None
-        try:
-            change_pct = float(row.iloc[3]) if len(row) > 3 else None
-        except (ValueError, TypeError):
-            change_pct = None
-        try:
-            pe = float(row.iloc[10]) if len(row) > 10 else None
-        except (ValueError, TypeError):
-            pe = None
-        try:
-            pb = float(row.iloc[11]) if len(row) > 11 else None
-        except (ValueError, TypeError):
-            pb = None
-        try:
-            market_cap = float(row.iloc[12]) if len(row) > 12 else None
-        except (ValueError, TypeError):
-            market_cap = None
-        try:
-            turnover = float(row.iloc[7]) if len(row) > 7 else None
-        except (ValueError, TypeError):
-            turnover = None
-
-        # Apply filters
+        market_cap = _safe_float(row, 12)
         if market_cap is None or market_cap < min_market_cap:
             continue
+
+        pe = _safe_float(row, 10)
         if max_pe is not None and pe is not None and pe > max_pe:
             continue
 
@@ -274,15 +284,14 @@ def screen_stocks(
             "ticker": f"{code}.{suffix}",
             "code": code,
             "name": name,
-            "price": price,
-            "change_pct": change_pct,
+            "price": _safe_float(row, 2),
+            "change_pct": _safe_float(row, 3),
             "pe": pe,
-            "pb": pb,
+            "pb": _safe_float(row, 11),
             "market_cap": market_cap,
-            "turnover": turnover,
+            "turnover": _safe_float(row, 7),
         })
 
-    # Sort by market cap descending
     results.sort(key=lambda x: x.get("market_cap") or 0, reverse=True)
     return results
 
@@ -294,20 +303,25 @@ def get_financial_snapshots(
     """Get key financial metrics for a list of tickers.
 
     Fetches ``stock_financial_analysis_indicator`` for each ticker.
-    This is relatively slow (~1-2s per stock), so only call for the
-    top candidates after initial screening.
+    This is relatively slow (~1-2s per stock, sequential), so only call
+    for the top candidates after initial screening.  Progress is logged
+    at the INFO level.
 
     Returns a list of dicts enriched with ROE, ROA, revenue growth,
     net margin, debt ratio, and EPS.
     """
     ak = _ensure_akshare()
     results: list[dict] = []
+    batch = tickers[:max_stocks]
+    total = len(batch)
 
-    for ticker in tickers[:max_stocks]:
+    for i, ticker in enumerate(batch):
         bare = _bare_code(ticker)
         try:
             df = ak.stock_financial_analysis_indicator(symbol=bare, start_year="2023")
             if df is None or df.empty:
+                if total <= 10 or (i + 1) % 10 == 0:
+                    logger.info("  Financial snapshots: %d/%d", i + 1, total)
                 continue
             latest = df.iloc[-1]
 
@@ -336,8 +350,12 @@ def get_financial_snapshots(
             })
         except Exception as exc:
             logger.debug("Financial snapshot failed for %s: %s", ticker, exc)
-            continue
 
+        if total > 5 and (i + 1) % 5 == 0:
+            logger.info("  Financial snapshots: %d/%d (%d ok)", i + 1, total, len(results))
+
+    if total > 0:
+        logger.info("  Financial snapshots complete: %d/%d succeeded", len(results), total)
     return results
 
 

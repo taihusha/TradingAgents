@@ -36,6 +36,7 @@ from datetime import datetime
 import pandas as pd
 
 from .symbol_utils import NoMarketDataError
+from ._browser_session import inject_browser_session  # noqa: E402, F401 — TLS/UA patch for akshare
 
 logger = logging.getLogger(__name__)
 

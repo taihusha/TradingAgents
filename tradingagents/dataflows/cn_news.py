@@ -44,6 +44,8 @@ import re
 from difflib import SequenceMatcher
 from typing import Optional
 
+from ._browser_session import inject_browser_session  # noqa: E402, F401 — TLS/UA patch for akshare
+
 logger = logging.getLogger(__name__)
 
 
