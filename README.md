@@ -47,7 +47,11 @@
 |------|------|------|
 | **A 股新闻** | 东方财富个股新闻 + 宏观政策新闻，via akshare。品质过滤：广告识别 → 低质剔除 → 标题查重 → 来源权威度评分，公告/研报/财报自动标 📌 置顶 | `dataflows/cn_news.py` |
 | **A 股社交媒体情绪** | 东方财富股吧 + 雪球 + 同花顺 + 定量情绪指标（参与意愿/关注指数/综合评分/机构参与度），via akshare | `dataflows/cn_social.py` |
-| **A 股基本面数据** | akshare 提供 80+ 财务指标（PE/PB/ROE/利润率/增速/负债率/现金流）。yfinance → akshare 自动 fallback | `dataflows/cn_fundamentals.py` |
+| **A 股基本面数据** | akshare 提供 80+ 财务指标（PE/PB/ROE/利润率/增速/负债率/现金流）。三层降级：yfinance → akshare → baostock（免费、注册制、稳定不回封） | `dataflows/cn_fundamentals.py`, `dataflows/baostock_fundamentals.py` |
+| **A 股浏览器会话伪装** | 自动注入 Chrome 131 UA 头 + 可选 curl_cffi TLS 指纹伪装（Chrome 110），对抗东方财富反爬 | `dataflows/_browser_session.py` |
+| **FRED 宏观指标** ✨ | 美联储经济数据（CPI/PCE/失业率/利率/收益率曲线/VIX），新闻分析师可实时查询。需 `FRED_API_KEY` | `dataflows/fred.py` |
+| **Polymarket 预测市场** ✨ | 实时市场隐含概率（美联储决策/衰退/地缘/加密），零配置即用。新闻分析师自动获取前瞻性量化信号 | `dataflows/polymarket.py` |
+| **供应商错误体系** ✨ | `VendorNotConfiguredError` / `VendorRateLimitError` / `NoMarketDataError` 三层错误分类。失败自动 fallback，全部不可用时返回明确哨兵 "NO_DATA_AVAILABLE"，防止 LLM 编造数据 | `dataflows/errors.py`, `dataflows/interface.py` |
 | **中国宏观查询** | 10 条全球新闻查询中含 5 条中国特化（央行/CSI300/产业政策/中美贸易/亚洲供应链） | `default_config.py` |
 | **双时间维度评级** | PM 输出短线（1-3月，技术/情绪驱动）和长线（6-18月，基本面/产业驱动）独立评级，允许分歧 | `schemas.py`, `portfolio_manager.py` |
 | **产业链卡点注入** | 从持仓 README 提取预计算的产业链/稀缺层分析，注入 Bull/Bear 研究员 prompt，锚定真实价值链位置 | `agent_utils.py`, `bull/bear_researcher.py` |
@@ -65,7 +69,7 @@
 | 标的身份解析 | yfinance 获取公司名/行业，防 LLM 幻觉 | A 股用 akshare 补充 |
 | 复盘反思 | MemoryLog 记录历史决策 + 5 日收益回溯 | 反思不反馈到下一次分析 |
 | 情绪信号 | 股吧/雪球/定量指标 | 缺少情绪-价格背离检测 |
-| 供应商链条 | serenity-skill 预计算产业链分析 | 不能自动发现同层替代标的 |
+| FRED 宏观数据 | 已集成，新闻分析师可用 | 需手动申请免费 API Key |
 
 ### ❌ 尚未实现
 
@@ -75,7 +79,6 @@
 | **模拟交易 / 回测** | 无可视化虚拟盘 | TradingAgents-CN 内置虚拟交易环境 |
 | **Web UI** | 纯 CLI | TradingAgents-CN FastAPI + Vue 3 |
 | **报告导出 (Word/PDF)** | 仅 Markdown | TradingAgents-CN 多格式导出 |
-| **Tushare / BaoStock 数据源** | 仅 yfinance + akshare | TradingAgents-CN 三源 fallback |
 | **风险矩阵（跨标的）** | 单标的逐一风控，无组合层面分析 | — |
 | **实时价格预警** | 无推送通知 | — |
 
@@ -94,7 +97,7 @@ $env:WEEKLY_MAX_WORKERS = "5"
 ```
 
 **模型**: deepseek-v4-pro (分析师/研究员), deepseek-v4-flash (Judge/PM)
-**数据**: .env 中设置 `TRADINGAGENTS_CN_SOCIAL_SOURCES=eastmoney_guba,eastmoney_sentiment`
+**数据**: .env 中设置 `TRADINGAGENTS_CN_SOCIAL_SOURCES=eastmoney_guba,eastmoney_sentiment`，可选 `FRED_API_KEY` 开启宏观指标查询
 
 ---
 
